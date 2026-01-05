@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Exercise Prompt Generator — Create local JSON with detailed prompts</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+            max-width: 1100px;
+            margin: 24px auto;
+            color: #111
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 20px
+        }
+
+        p.lead {
+            margin: 6px 0 18px;
+            color: #444
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 14px;
+            flex-wrap: wrap
+        }
+
+        button {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            background: #fff;
+            cursor: pointer
+        }
+
+        button.primary {
+            background: #2E8BFF;
+            color: #fff;
+            border-color: #1977d9
+        }
+
+        button.warn {
+            background: #ff7043;
+            color: #fff;
+            border-color: #e65a2b
+        }
+
+        #log {
+            white-space: pre-wrap;
+            background: #f7f9fc;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #e6eefa;
+            max-height: 320px;
+            overflow: auto
+        }
+
+        .row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap
+        }
+
+        label {
+            font-size: 13px;
+            color: #333
+        }
+
+        input[type=text] {
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            min-width: 280px
+        }
+
+        small.note {
+            color: #666
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Exercise Prompt Generator</h1>
+    <p class="lead">This tool fetches the exercises JSON from the public repo and generates a local downloadable JSON
+        with detailed, phase-by-phase prompts (badge + label + arrows) following your example format. Use the options
+        below then click "Generate JSON".</p>
+
+    <div class="controls">
+        <button id="btnFetch" class="primary">Fetch & Generate JSON</button>
+        <button id="btnDownload" disabled>Download JSON</button>
+        <button id="btnPreview" disabled>Preview Generated (first 5)</button>
+        <button id="btnClear" class="warn" disabled>Clear Generated</button>
+        <label>
+            <input id="limitToggle" type="checkbox" checked>
+            Generate for all exercises (uncheck to limit to first 50 for faster iteration)
+        </label>
+    </div>
+
+    <div class="row">
+        <label>Source URL:</label>
+        <input id="sourceUrl" type="text"
+            value="https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json" />
+        <small class="note">You can replace with a local or other URL if needed.</small>
+    </div>
+
+    <div id="log">Status log will appear here.</div>
+
+    <script>
+        const btnFetch = document.getElementById('btnFetch');
+        const btnDownload = document.getElementById('btnDownload');
+        const btnPreview = document.getElementById('btnPreview');
+        const btnClear = document.getElementById('btnClear');
+        const logEl = document.getElementById('log');
+        const sourceUrlEl = document.getElementById('sourceUrl');
+        const limitToggle = document.getElementById('limitToggle');
+
+        let generatedJSON = null;
+
+        function log(msg) {
+            logEl.textContent += msg + "\n";
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Heuristic helpers
+        function guessView(ex) {
+            const txt = (ex.instructions || []).join(' ').toLowerCase() + ' ' + (ex.name || '').toLowerCase();
+            // prefer front view for adductions/abductions, lateral band work and unilateral ankle stuff
+            if (/\b(adduct|abduct|abduction|adduction|front|facing|facing forward|face)\b/.test(txt)) return 'strict front view';
+            // otherwise side view is best for most compound movements
+            return 'strict side view';
+        }
+
+        function isHinge(ex) {
+            const txt = (ex.instructions || []).join(' ').toLowerCase() + ' ' + (ex.name || '').toLowerCase();
+            return /\b(hinge|hip|romanian|deadlift|good morning|hip hinge)\b/.test(txt);
+        }
+
+        function isSquat(ex) {
+            const txt = (ex.instructions || []).join(' ').toLowerCase() + ' ' + (ex.name || '').toLowerCase();
+            return /\b(squat|squats|sit-up|sit up|front squat|back squat|split squat|bulgarian)\b/.test(txt);
+        }
+
+        function isLunge(ex) {
+            const txt = (ex.instructions || []).join(' ').toLowerCase() + ' ' + (ex.name || '').toLowerCase();
+            return /\b(lunge|lunges|step forward|reverse lunge|walking lunge)\b/.test(txt);
+        }
+
+        // Build descriptive phrase fallback
+        function fallbackPhaseDesc(ex, idx) {
+            const ins = ex.instructions || [];
+            if (ins[idx]) return ins[idx];
+            if (idx === 0) return `Standing in the starting position for ${ex.name}`;
+            if (idx === 1) return `Performing the main movement of ${ex.name}`;
+            return `Returning or reaching the peak position of ${ex.name}`;
+        }
+
+        // Determine arrow description for a phase
+        function arrowDescriptionForPhase(ex, phaseIndex) {
+            // phaseIndex: 1 => execution (middle), 2 => return (last)
+            if (isHinge(ex)) {
+                if (phaseIndex === 1) return 'Add a bright red arrow pointing downward and forward along the torso to indicate hip hinge movement';
+                return 'Add a bright red arrow pointing upward and backward along the torso to indicate hip extension movement';
+            }
+            if (isSquat(ex)) {
+                if (phaseIndex === 1) return 'Add a bright red arrow pointing downward along the center of the body to indicate descent';
+                return 'Add a bright red arrow pointing upward along the center of the body to indicate rising';
+            }
+            if (isLunge(ex)) {
+                if (phaseIndex === 1) return 'Add a bright red arrow pointing forward and downward along the front leg to indicate stepping/lowering';
+                return 'Add a bright red arrow pointing upward and backward from the front foot to indicate recovery';
+            }
+            // Defaults: indicate primary movement direction generically
+            if (phaseIndex === 1) return 'Add a bright red arrow showing the primary direction of movement';
+            return 'Add a bright red arrow showing the return movement direction';
+        }
+
+        // Heuristic phase names
+        function phaseNameForExercise(ex, phaseIndex) {
+            // phaseIndex: 0,1,2 => 1,2,3
+            if (isHinge(ex)) {
+                if (phaseIndex === 0) return 'Starting Position';
+                if (phaseIndex === 1) return ex.name.toLowerCase().includes('deadlift') ? 'Lockout Position' : 'Bottom Position';
+                return 'Lowering / Rising Phase';
+            }
+            if (isSquat(ex)) {
+                if (phaseIndex === 0) return 'Starting Position';
+                if (phaseIndex === 1) return 'Bottom Position';
+                return 'Rising Phase';
+            }
+            if (isLunge(ex)) {
+                if (phaseIndex === 0) return 'Starting Position';
+                if (phaseIndex === 1) return 'Lunge Position';
+                return 'Recovery Phase';
+            }
+            // generic
+            if (phaseIndex === 0) return 'Starting Position';
+            if (phaseIndex === 1) return 'Execution Phase';
+            return 'Return/Peak Phase';
+        }
+
+        // Build prompt text for one phase
+        function buildPhasePrompt(ex, phaseIndex) {
+            const phase_number = phaseIndex + 1;
+            const phase_name = phaseNameForExercise(ex, phaseIndex);
+            const view = guessView(ex);
+            const desc = fallbackPhaseDesc(ex, phaseIndex);
+            const arrow = (phaseIndex === 0) ? '' : (arrowDescriptionForPhase(ex, phaseIndex));
+            const prompt = `Minimalist black vector silhouette of a person performing ${ex.name}, ${view}. ${desc}. ${arrow ? arrow + '.' : ''} White background, high contrast, flat solid fill; no gradients or internal details. Include a bright blue (#2E8BFF) circular badge with white number ${phase_number} in the top-left and black text "${phase_name}" directly below in a clean sans-serif.`;
+            return { phase_number, phase_name, prompt };
+        }
+
+        // Transform one exercise to desired schema
+        function transformExercise(ex, idx) {
+            // keep the original key fields that matter
+            const out = {
+                id: ex.id || `${(ex.name || 'no-name').replace(/\s+/g, '_')}_${idx}`,
+                name: ex.name || `Exercise ${idx + 1}`,
+                equipment: ex.equipment || 'body only',
+                primaryMuscles: ex.primaryMuscles || [],
+                secondaryMuscles: ex.secondaryMuscles || [],
+                instructions: ex.instructions || [],
+                prompts: []
+            };
+
+            // Build 3 phase prompts
+            for (let p = 0; p < 3; p++) {
+                out.prompts.push(buildPhasePrompt(ex, p));
+            }
+            return out;
+        }
+
+        async function fetchAndGenerate() {
+            try {
+                btnFetch.disabled = true;
+                logEl.textContent = '';
+                log('Fetching exercises JSON from source...');
+                const resp = await fetch(sourceUrlEl.value.trim());
+                if (!resp.ok) throw new Error(`Failed to fetch: ${resp.status} ${resp.statusText}`);
+                const data = await resp.json();
+                if (!Array.isArray(data)) {
+                    // some sources wrap in { exercises: [...] } - try to detect
+                    if (Array.isArray(data.exercises)) {
+                        log('Source contains top-level "exercises" array — using that.');
+                        data.exercises = data.exercises;
+                    } else {
+                        // try common keys
+                        const arr = data.exercises || data.items || data.data;
+                        if (!Array.isArray(arr)) throw new Error('Fetched JSON does not contain an array of exercises.');
+                        data = arr;
+                    }
+                }
+                const exercises = Array.isArray(data) ? data : data.exercises;
+                log(`Fetched ${exercises.length} exercises.`);
+
+                const useAll = limitToggle.checked;
+                const limit = useAll ? exercises.length : Math.min(50, exercises.length);
+                log(`Generating prompts for ${limit} exercises${useAll ? '' : ' (first 50 for testing)'}...`);
+
+                const out = { exercises: [] };
+                for (let i = 0; i < limit; i++) {
+                    const ex = exercises[i];
+                    const transformed = transformExercise(ex, i);
+                    out.exercises.push(transformed);
+                    if ((i + 1) % 25 === 0) log(`Processed ${i + 1}/${limit}...`);
+                }
+
+                generatedJSON = out;
+                btnDownload.disabled = false;
+                btnPreview.disabled = false;
+                btnClear.disabled = false;
+                log(`Done. Generated JSON object with ${out.exercises.length} exercises.`);
+            } catch (err) {
+                log('ERROR: ' + String(err));
+                btnFetch.disabled = false;
+            }
+            btnFetch.disabled = false;
+        }
+
+        function downloadObjectAsJson(exportObj, exportName) {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2));
+            const dlAnchorElem = document.createElement('a');
+            dlAnchorElem.setAttribute("href", dataStr);
+            dlAnchorElem.setAttribute("download", exportName + ".json");
+            dlAnchorElem.click();
+        }
+
+        btnFetch.addEventListener('click', () => {
+            logEl.textContent = '';
+            fetchAndGenerate();
+        });
+
+        btnDownload.addEventListener('click', () => {
+            if (!generatedJSON) return alert('No generated JSON yet. Click "Fetch & Generate JSON" first.');
+            const name = `exercise-prompts-${new Date().toISOString().slice(0, 10)}`;
+            downloadObjectAsJson(generatedJSON, name);
+        });
+
+        btnPreview.addEventListener('click', () => {
+            if (!generatedJSON) return alert('No generated JSON yet.');
+            // show first 5 exercises in log (compact)
+            const preview = generatedJSON.exercises.slice(0, 5).map(ex => {
+                return {
+                    id: ex.id,
+                    name: ex.name,
+                    instructions: ex.instructions,
+                    prompts: ex.prompts.map(p => ({ phase: p.phase_number, name: p.phase_name, promptSnippet: p.prompt.slice(0, 140) + (p.prompt.length > 140 ? '…' : '') }))
+                };
+            });
+            logEl.textContent = JSON.stringify({ preview }, null, 2);
+        });
+
+        btnClear.addEventListener('click', () => {
+            generatedJSON = null;
+            btnDownload.disabled = true;
+            btnPreview.disabled = true;
+            btnClear.disabled = true;
+            log('Cleared generated JSON from memory.');
+        });
+
+        // initial note
+        log('Ready. Click "Fetch & Generate JSON" to create a local file of prompts (this will NOT upload anything).');
+    </script>
+</body>
+
+</html>
